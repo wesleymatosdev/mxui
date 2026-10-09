@@ -186,6 +186,7 @@ func (s *server) runMatrixSync() {
 						continue
 					}
 					mxevent.RecordUse(a.MessageEvent, a.ComponentID, a.UserID)
+					log.Printf("interaction accepted: %s → %s (msg=%s)", a.UserID, a.ComponentID, a.MessageEvent)
 					s.forwardDiscordInteraction(a)
 				case "io.mxui.modal_submit":
 					var m map[string]any
