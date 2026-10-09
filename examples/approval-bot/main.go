@@ -62,6 +62,8 @@ func main() {
 	fmt.Println("MESSAGE=" + eventID)
 	log.Printf("interactive message sent (%s); waiting for clicks...", eventID)
 
+	expiryByMsg := map[string]int64{}
+
 	for {
 		sync, err := c.Sync(30 * time.Second)
 		if err != nil {
@@ -70,6 +72,20 @@ func main() {
 			continue
 		}
 		for rid, r := range sync.Rooms.Join {
+			// index io.mxui.component_message events by the message they pair with
+			for _, ev := range r.Timeline.Events {
+				if ev.Type == "io.mxui.component_message" {
+					var c struct {
+						Expiry     int64 `json:"expiry"`
+						RelatesTo  struct {
+							EventID string `json:"event_id"`
+						} `json:"m.relates_to"`
+					}
+					if err := json.Unmarshal(ev.Content, &c); err == nil && c.RelatesTo.EventID != "" {
+						expiryByMsg[c.RelatesTo.EventID] = c.Expiry
+					}
+				}
+			}
 			for _, ev := range r.Timeline.Events {
 				if ev.Type != "io.mxui.component_action" || ev.Sender == c.UserID {
 					continue
@@ -79,13 +95,30 @@ func main() {
 					log.Printf("bad action event: %v", err)
 					continue
 				}
-				if !mxevent.VerifyTrigger(&a) {
-					log.Printf("REJECTED forged/expired trigger from %s", a.UserID)
-					// still acknowledge visibly, mimicking Discord's silent drop
+				_ = rid
+				ok := false
+				if a.TriggerID != "" {
+					// v0 signed trigger (legacy clicker)
+					ok = mxevent.VerifyTrigger(&a)
+				} else {
+					// v1 unsigned action: freshness + expiry + single-use.
+					// Trust level = Discord components: any room member may
+					// click; the bot dedupes and enforces TTL.
+					fresh := time.Now().Unix()-a.TS < 120 && a.TS <= time.Now().Unix()+120
+					notStale := true
+					if exp, found := expiryByMsg[a.MessageEvent]; found {
+						notStale = !mxevent.CheckStale(exp)
+					}
+					ok = fresh && notStale && !mxevent.IsUsed(a.MessageEvent, a.ComponentID, a.UserID)
+					if ok {
+						mxevent.RecordUse(a.MessageEvent, a.ComponentID, a.UserID)
+					}
+				}
+				if !ok {
+					log.Printf("REJECTED action from %s (component=%s)", a.UserID, a.ComponentID)
 					continue
 				}
 				log.Printf("interaction: %s clicked %q (value=%s)", a.UserID, a.ComponentID, a.Value)
-				_ = rid
 				outcome := "✅ Approved by " + a.UserID
 				if a.ComponentID == "reject" {
 					outcome = "❌ Rejected by " + a.UserID

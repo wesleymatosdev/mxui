@@ -27,7 +27,7 @@ type Client struct {
 }
 
 func New(homeserver, accessToken string) *Client {
-	return &Client{Homeserver: homeserver, AccessToken: accessToken, HTTP: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{Homeserver: homeserver, AccessToken: accessToken, HTTP: &http.Client{Timeout: 60 * time.Second}}
 }
 
 func (c *Client) do(method, path string, body any, out any) error {
