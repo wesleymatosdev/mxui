@@ -186,7 +186,7 @@ func (s *server) runMatrixSync() {
 						continue
 					}
 					mxevent.RecordUse(a.MessageEvent, a.ComponentID, a.UserID)
-					s.forward("component_action", a)
+					s.forwardDiscordInteraction(a)
 				case "io.mxui.modal_submit":
 					var m map[string]any
 					if json.Unmarshal(ev.Content, &m) == nil {
@@ -253,6 +253,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/messages", s.handleSend)
+	mux.HandleFunc("POST /api/v10/channels/{id}/messages", s.handleDiscordPostMessage)
+	mux.HandleFunc("PATCH /api/v10/channels/{id}/messages/{mid}", s.handleDiscordPatchMessage)
+	// discord.js style: api root already carries /vN prefix (api: http://host/api omitted)
+	mux.HandleFunc("POST /v10/channels/{id}/messages", s.handleDiscordPostMessage)
+	mux.HandleFunc("PATCH /v10/channels/{id}/messages/{mid}", s.handleDiscordPatchMessage)
 	mux.HandleFunc("POST /api/v1/bots", func(w http.ResponseWriter, r *http.Request) {
 		var rr registerReq
 		if err := json.NewDecoder(r.Body).Decode(&rr); err != nil || rr.WebhookURL == "" {

@@ -219,6 +219,14 @@ func (c *Client) SendAction(roomID string, a *mxevent.ActionEvent) (string, erro
 	return out.EventID, err
 }
 
+// SendPlain posts a plain m.room.message.
+func (c *Client) SendPlain(roomID, body string) error {
+	return c.do("PUT", "/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/send/m.room.message/"+
+		fmt.Sprintf("p%d", time.Now().UnixNano()), map[string]any{
+		"msgtype": "m.text", "body": body,
+	}, nil)
+}
+
 // PresentModal sends io.mxui.modal_present targeting a specific user's action.
 // The web client opens the dialog when it sees action.userId == its own.
 func (c *Client) PresentModal(roomID string, action mxevent.ActionEvent, spec map[string]any) error {
