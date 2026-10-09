@@ -132,8 +132,9 @@ async function syncLoop() {
       since = j.next_batch;
       const r = j.rooms && j.rooms.join && j.rooms.join[roomId];
       if (r) {
-        handleEvents(r.state && r.state.events || []);
-        handleEvents(r.timeline.events || []);
+        handleEvents(r.state && r.state.events || [], false);
+        handleEvents(r.timeline.events || [], !firstSync);
+        firstSync = false;
       }
     } catch (e) {
       $('status').textContent = 'sync error: ' + e.message;
@@ -145,7 +146,8 @@ async function syncLoop() {
 const compByMsg = {};   // fallbackEventId -> blocks[]
 const editedBodies = {} // originalEventId -> new body
 
-function handleEvents(events) {
+let firstSync = true;
+function handleEvents(events, liveEvents) {
   for (const ev of events) {
     if (ev.type === 'm.room.member') users[ev.sender] =
       (ev.content.displayname || ev.sender);
@@ -156,7 +158,8 @@ function handleEvents(events) {
     }
     if (ev.type === 'io.mxui.modal_present') {
       const act = ev.content.action;
-      if (act && act.userId === userId) openModalDialog(act, ev.content, ev.event_id);
+      // only open modals from live timeline events, never initial history sync
+      if (act && act.userId === userId && liveEvents) openModalDialog(act, ev.content, ev.event_id);
     }
     if (ev.type === 'm.room.message') {
       const rel = ev.content['m.relates_to'] || {};
