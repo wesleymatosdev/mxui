@@ -12,9 +12,9 @@
   header { background:#2b2d31; padding:12px 16px; border-bottom:1px solid #1e1f22;
            display:flex; gap:10px; align-items:center; }
   header h1 { font-size:15px; margin:0; flex:1; color:#f2f3f5; }
-  input, button { font:inherit; }
-  input { background:#1e1f22; color:#dbdee1; border:1px solid #111214;
-          border-radius:4px; padding:6px 8px; }
+  input, button, select, textarea { font:inherit; }
+  input, textarea { background:#1e1f22; color:#dbdee1;
+          border:1px solid #111214; border-radius:4px; padding:6px 8px; }
   #login { max-width:340px; margin:auto; display:flex; flex-direction:column; gap:8px; }
   #login label { font-size:12px; color:#949ba4; }
   #room { display:flex; flex-direction:column; flex:1; overflow:hidden; }
@@ -24,15 +24,31 @@
   .msg .who { font-size:12px; color:#949ba4; margin-bottom:2px; }
   .msg .txt { white-space:pre-wrap; }
   .msg.edited .txt::after { content:" (edited)"; font-size:11px; color:#949ba4; }
-  .mxui-buttons { display:flex; gap:8px; margin-top:8px; }
+  .mxui-buttons { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center; }
   .mxui-btn { border:none; border-radius:4px; padding:6px 14px; cursor:pointer;
               font-weight:500; color:#fff; }
   .mxui-btn.primary { background:#5865f2; }
   .mxui-btn.danger  { background:#da373c; }
   .mxui-btn.default { background:#4e5058; }
   .mxui-btn:disabled { opacity:.45; cursor:default; }
+  .mxui-select { background:#1e1f22; color:#dbdee1; border:1px solid #111214;
+                 border-radius:4px; padding:6px 8px; }
+  #composer { display:flex; gap:8px; padding:12px 16px; background:#2b2d31;
+              border-top:1px solid #1e1f22; }
+  #composer input { flex:1; }
+  #send { background:#5865f2; color:#fff; border:none; border-radius:4px;
+          padding:6px 16px; cursor:pointer; }
   #status { padding:6px 16px; font-size:12px; color:#949ba4;
             background:#2b2d31; border-top:1px solid #1e1f22; }
+  #modalBack { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none;
+               align-items:center; justify-content:center; }
+  #modalBack.open { display:flex; }
+  #modal { background:#313338; border-radius:8px; min-width:380px; max-width:480px;
+           padding:18px; border:1px solid #1e1f22; }
+  #modal h3 { margin:0 0 12px; font-size:16px; color:#f2f3f5; }
+  #modal label { display:block; font-size:12px; color:#949ba4; margin:10px 0 4px; }
+  #modal input, #modal select { width:100%; }
+  #modal .row { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
 </style>
 </head>
 <body>
@@ -49,12 +65,28 @@
 
 <div id="room" style="display:none">
   <div id="msgs"></div>
+  <div id="composer">
+    <input id="draft" placeholder="Message, or /command…" autocomplete="off">
+    <button id="send">Send</button>
+  </div>
   <div id="status">connecting…</div>
+</div>
+
+<div id="modalBack">
+  <div id="modal">
+    <h3 id="modalTitle">Dialog</h3>
+    <div id="modalFields"></div>
+    <div class="row">
+      <button class="mxui-btn default" id="modalCancel">Cancel</button>
+      <button class="mxui-btn primary" id="modalSubmit">Submit</button>
+    </div>
+  </div>
 </div>
 
 <script>
 'use strict';
 let acc = null, userId = null, roomId = null, since = null, users = {};
+let openModal = null; // {action, spec, eventId}
 
 const $ = id => document.getElementById(id);
 
@@ -70,7 +102,6 @@ async function api(method, path, body) {
   return j;
 }
 
-// ---- login ----
 $('go').onclick = async () => {
   $('lerr').textContent = '';
   try {
@@ -87,11 +118,11 @@ $('go').onclick = async () => {
     $('room').style.display = 'flex';
     $('who').textContent = userId;
     $('status').textContent = 'connected — room ' + roomId;
+    $('draft').focus();
     syncLoop();
   } catch (e) { $('lerr').textContent = e.message; }
 };
 
-// ---- sync + render ----
 async function syncLoop() {
   for (;;) {
     try {
@@ -100,8 +131,10 @@ async function syncLoop() {
       const j = await api('GET', q);
       since = j.next_batch;
       const r = j.rooms && j.rooms.join && j.rooms.join[roomId];
-      if (r) handleEvents(r.state && r.state.events || []);
-      if (r) handleEvents(r.timeline.events || []);
+      if (r) {
+        handleEvents(r.state && r.state.events || []);
+        handleEvents(r.timeline.events || []);
+      }
     } catch (e) {
       $('status').textContent = 'sync error: ' + e.message;
       await new Promise(res => setTimeout(res, 2000));
@@ -109,7 +142,6 @@ async function syncLoop() {
   }
 }
 
-// component events keyed by the message they reply to
 const compByMsg = {};   // fallbackEventId -> blocks[]
 const editedBodies = {} // originalEventId -> new body
 
@@ -121,6 +153,10 @@ function handleEvents(events) {
       const rel = ev.content['m.relates_to'] &&
                   ev.content['m.relates_to'].event_id;
       if (rel) compByMsg[rel] = ev.content.blocks || [];
+    }
+    if (ev.type === 'io.mxui.modal_present') {
+      const act = ev.content.action;
+      if (act && act.userId === userId) openModalDialog(act, ev.content, ev.event_id);
     }
     if (ev.type === 'm.room.message') {
       const rel = ev.content['m.relates_to'] || {};
@@ -148,6 +184,9 @@ function renderMsg(ev) {
     $('msgs').appendChild(el);
   }
   updateMsgDom(id, ev);
+  const nearBottom = $('msgs').scrollHeight - $('msgs').scrollTop -
+                     $('msgs').clientHeight < 200;
+  if (nearBottom) $('msgs').scrollTop = $('msgs').scrollHeight;
 }
 
 function updateMsgDom(id, ev) {
@@ -159,52 +198,139 @@ function updateMsgDom(id, ev) {
   const txt = el.querySelector('.txt');
   if (txt && body !== undefined) txt.textContent = body;
   el.classList.toggle('edited', editedBodies[id] !== undefined);
-  // strip the "(edited)" if the edit replaced with resolved text — cosmetic
-  // re-render buttons state
-  const resolved = /\b(Approved|Rejected)\b/.test(body || '');
+  const resolved = /\b(Approved|Rejected|Deploying|Scheduled)\b/.test(body || '');
   const btns = el.querySelector('.mxui-buttons');
-  if (btns && resolved) btns.querySelectorAll('button').forEach(b => b.disabled = true);
+  if (btns && resolved) btns.querySelectorAll('button,select').forEach(b => b.disabled = true);
 }
 
 function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, '_'); }
 
-// after any new component_message, attach buttons to the paired message
 setInterval(() => {
   for (const [msgId, blocks] of Object.entries(compByMsg)) {
     const el = document.getElementById('e' + cssEscape(msgId));
     if (!el || el.querySelector('.mxui-buttons')) continue;
     const wrap = document.createElement('div'); wrap.className = 'mxui-buttons';
     for (const b of blocks) for (const c of b.components || []) {
-      const btn = document.createElement('button');
-      btn.className = 'mxui-btn ' + (c.style || 'default');
-      btn.textContent = c.label;
-      btn.onclick = () => click(msgId, c, btn);
-      wrap.appendChild(btn);
+      if (c.type === 'select') {
+        const sel = document.createElement('select');
+        sel.className = 'mxui-select';
+        for (const o of c.options || []) {
+          const op = document.createElement('option');
+          op.value = o.value; op.textContent = o.label || o.value;
+          sel.appendChild(op);
+        }
+        sel.onchange = () => { sel.dataset.chosen = sel.value; };
+        sel.dataset.chosen = (c.options && c.options[0] || {}).value || '';
+        wrap.appendChild(sel);
+      } else {
+        const btn = document.createElement('button');
+        btn.className = 'mxui-btn ' + (c.style || 'default');
+        btn.textContent = c.label;
+        btn.onclick = () => click(msgId, c, btn);
+        wrap.appendChild(btn);
+      }
     }
     if (wrap.children.length) el.appendChild(wrap);
   }
 }, 300);
 
 async function click(msgId, comp, btn) {
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   $('status').textContent = 'sending interaction…';
   try {
+    const sel = btn && btn.parentElement.querySelector('.mxui-select');
     await api('PUT', '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId) +
       '/send/io.mxui.component_action/' + Date.now(), {
         interactionId: msgId + '|' + comp.id,
         messageEvent: msgId,
         componentId: comp.id,
-        value: comp.value || '',
+        value: sel ? sel.dataset.chosen : (comp.value || ''),
         userId: userId,
         roomId: roomId,
         ts: Math.floor(Date.now() / 1000)
       });
     $('status').textContent = 'interaction sent — waiting for bot…';
   } catch (e) {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     $('status').textContent = 'interaction failed: ' + e.message;
   }
 }
+
+// ---- composer: plain message or /command ----
+async function send() {
+  const t = $('draft').value.trim();
+  if (!t) return;
+  $('draft').value = '';
+  if (t.startsWith('/')) {
+    const sp = t.indexOf(' ');
+    const cmd = sp < 0 ? t.slice(1) : t.slice(1, sp);
+    const arg = sp < 0 ? '' : t.slice(sp + 1);
+    await api('PUT', '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId) +
+      '/send/io.mxui.command/' + Date.now(), {
+        command: cmd, args: arg, userId: userId, roomId: roomId,
+        ts: Math.floor(Date.now() / 1000)
+      });
+    $('status').textContent = 'command /' + cmd + ' sent…';
+  } else {
+    await api('PUT', '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId) +
+      '/send/m.room.message/' + Date.now(), {
+        msgtype: 'm.text', body: t
+      });
+  }
+}
+$('send').onclick = send;
+$('draft').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+// ---- modals ----
+function openModalDialog(action, spec, eventId) {
+  openModal = {action, spec, eventId};
+  $('modalTitle').textContent = spec.title || 'Dialog';
+  const f = $('modalFields'); f.innerHTML = '';
+  for (const fld of spec.fields || []) {
+    const lbl = document.createElement('label');
+    lbl.textContent = fld.label || fld.id;
+    f.appendChild(lbl);
+    let input;
+    if (fld.type === 'select') {
+      input = document.createElement('select');
+      input.className = 'mxui-select';
+      for (const o of fld.options || []) {
+        const op = document.createElement('option');
+        op.value = o.value; op.textContent = o.label || o.value;
+        input.appendChild(op);
+      }
+    } else {
+      input = document.createElement('input');
+      input.type = fld.type === 'number' ? 'number' : 'text';
+      if (fld.placeholder) input.placeholder = fld.placeholder;
+    }
+    input.id = 'mf-' + fld.id;
+    f.appendChild(input);
+  }
+  $('modalBack').classList.add('open');
+}
+
+$('modalCancel').onclick = () => { $('modalBack').classList.remove('open'); openModal = null; };
+$('modalSubmit').onclick = async () => {
+  if (!openModal) return;
+  const values = {};
+  for (const fld of openModal.spec.fields || []) {
+    const el = $('mf-' + fld.id);
+    if (el) values[fld.id] = el.value;
+  }
+  try {
+    await api('PUT', '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId) +
+      '/send/io.mxui.modal_submit/' + Date.now(), {
+        modalEvent: openModal.eventId,
+        action: openModal.action,
+        values: values,
+        userId: userId, roomId: roomId,
+        ts: Math.floor(Date.now() / 1000)
+      });
+    $('status').textContent = 'modal submitted — waiting for bot…';
+  } catch (e) { $('status').textContent = 'modal submit failed: ' + e.message; }
+  $('modalBack').classList.remove('open'); openModal = null;
+};
 </script>
 </body>
 </html>

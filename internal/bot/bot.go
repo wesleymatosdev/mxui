@@ -219,6 +219,27 @@ func (c *Client) SendAction(roomID string, a *mxevent.ActionEvent) (string, erro
 	return out.EventID, err
 }
 
+// PresentModal sends io.mxui.modal_present targeting a specific user's action.
+// The web client opens the dialog when it sees action.userId == its own.
+func (c *Client) PresentModal(roomID string, action mxevent.ActionEvent, spec map[string]any) error {
+	return c.do("PUT", "/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/send/io.mxui.modal_present/"+
+		fmt.Sprintf("m%d", time.Now().UnixNano()), map[string]any{
+		"title":   spec["title"],
+		"fields":  spec["fields"],
+		"action":  action,
+	}, nil)
+}
+
+// SendEphemeral posts a user-targeted ephemeral reply as a message with a
+// fallback marker (v0.2: visible in-room but prefixed for the target user).
+func (c *Client) SendEphemeral(roomID, userID, text string) error {
+	return c.do("PUT", "/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/send/m.room.message/"+
+		fmt.Sprintf("e%d", time.Now().UnixNano()), map[string]any{
+		"msgtype": "m.text",
+		"body":    text + " (ephemeral → " + userID + ")",
+	}, nil)
+}
+
 func escapeHTML(s string) string {
 	var b bytes.Buffer
 	for _, r := range s {

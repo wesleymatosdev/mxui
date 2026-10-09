@@ -22,11 +22,18 @@ const (
 
 // Component is one interactive element attached to a message.
 type Component struct {
-	ID    string `json:"id"`              // actionId, unique per message
-	Type  string `json:"type"`            // "button"
-	Label string `json:"label"`           // visible text
-	Style string `json:"style,omitempty"` // primary | danger | default
-	Value string `json:"value,omitempty"` // opaque payload to the bot
+	ID    string        `json:"id"`              // actionId, unique per message
+	Type  string        `json:"type"`            // "button" | "select"
+	Label string        `json:"label"`           // visible text
+	Style string        `json:"style,omitempty"` // primary | danger | default
+	Value string        `json:"value,omitempty"` // opaque payload to the bot
+	Options []SelectOption `json:"options,omitempty"` // for select
+}
+
+// SelectOption is one entry of a select component.
+type SelectOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 // ComponentBlock groups components (UIKit-style actions block).
