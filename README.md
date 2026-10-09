@@ -1,53 +1,74 @@
 # mxui — Discord-shaped interactive components over native Matrix
 
-**Thesis:** the missing piece of Matrix is rich interactions (buttons, modals, slash
-commands) — every platform that has them gives up privacy (Discord/Slack), and every
-private platform lacks them (Matrix E2EE rooms, Telegram secret chats). mxui defines a
-custom-event interaction layer that rides native Matrix rooms, including encrypted ones,
-and ships a bot-side SDK so any agent/bot can use it today.
+**Thesis:** the missing piece of Matrix is rich interactions (buttons, selects,
+modals, slash commands). Every platform that has them gives up privacy; every
+private platform lacks them. mxui is an interaction layer over native Matrix
+rooms — custom events any client can render — plus a bot gateway and a Discord
+Bot API compatibility slice, so existing Discord bots and agent frameworks run
+against a self-hosted Matrix backend by changing one base URL.
 
-## Architecture (MVP)
+## Status (2026-10-09)
 
+Tagged and e2e-verified through **v0.5.0**. See ROADMAP.md for the ladder.
+
+- **v0.1.0** — `io.mxui.component_message`/`component_action` events, HMAC
+  trigger + freshness + dedupe verification, message edits, web client with
+  real buttons. [evidence/01,02]
+- **v0.2.0** — composer, select menus, modals (`modal_present`/`modal_submit`),
+  slash commands with ephemeral replies. [evidence/v02-*]
+- **v0.4.0** — `mxui-server` gateway: bots register token+webhook, send via
+  REST (`POST /api/v1/messages`), receive interactions as webhooks. The
+  webhook-bot example has zero Matrix code. [evidence/v04-*]
+- **v0.5.0** — Discord Bot API slice: `POST/PATCH /v10/channels/:id/messages`,
+  `Bot`-prefixed auth, Discord component JSON → mxui blocks, Discord-shaped
+  interaction webhooks. **A real discord.js REST client completed a button
+  interaction round trip** (post → render → click → interaction webhook →
+  PATCH edit) with only `api:` pointed at mxui-server. [evidence/v05-*]
+
+## Quickstart (this machine)
+
+```bash
+# homeserver: continuwuity docker on :6167 (registration token in compose)
+cd ~/projects/personal/mxui
+MXUI_REG_TOKEN=mxui-mvp-dev-token go run ./cmd/mxui-server   # gateway :8790
+cd web && python3 -m http.server 8791                         # client
+open http://localhost:8791                                    # login mxui-clicker / clicker-pass-1
+
+# a Discord bot, unmodified except the base URL:
+cd examples/discord-bot && node bot.js   # needs discord.js in NODE_PATH
 ```
-mxui-server (Go)
-├── Bot SDK surface: POST /api/v1/messages        → send message + components
-│                      POST /api/v1/interactions  → webhook callbacks to bot URL
-├── Interaction event schema: io.mxui.component_action (custom event type)
-│   { interactionId, messageId, componentId (actionId), value, user, room, ts,
-│     triggerId (single-use, HMAC, TTL 60s — anti-spoof, UIKit triggerId semantics) }
-├── Render fallback: m.room.message with org.matrix.custom.html fallback markup
-│   (plain clients show "[Approve] [Reject]" links w/ mxui:// deep-links)
-├── Message edits on interaction: m.room.message edits referencing source event
-└── E2EE path (v2): bot is a normal room member joining Megolm sessions via
-    vodozemac (matrix-nio equivalent in Go: matrix-nio-e2e has no Go port; use
-    embedded Python sidecar or Rust FFI vodozemac) — server NEVER holds room keys.
-```
 
-## What the MVP proves
+## Event schema (io.mxui.*)
 
-1. Button click → `io.mxui.component_action` event → bot webhook → bot edits message.
-   Full Discord-style round trip over native Matrix, zero bridges.
-2. The interaction survives federation semantics (custom events replicate like any event).
-3. Fallback rendering means stock clients (Element) show usable text, not broken blobs.
-4. Non-encrypted rooms in v1 (server-to-server TLS); E2EE rooms are v2 with client-held
-   keys — the commercial moat ("even your agents can't read rooms they aren't keyed into").
+- `io.mxui.component_message` — persistent blocks, `m.in_reply_to` the
+  human-readable fallback message, `expiry` unix ts.
+- `io.mxui.component_action` — {interactionId, messageEvent, componentId,
+  value, userId, roomId, ts}. v1 verification: freshness ±120s, expiry,
+  single-use per (message, component, user). v0 HMAC triggerId still honored.
+- `io.mxui.modal_present` / `io.mxui.modal_submit` — targeted dialogs
+  (client opens when action.userId matches).
+- `io.mxui.command` — {command, args, userId} from the composer.
+
+Trust model (v1) = Discord components: any room member may click; the gateway
+dedupes, enforces TTL, and forwards. Per-user signing + E2EE rooms are v0.6.
 
 ## Repo layout
 
-- `cmd/mxui-server/` — HTTP API for bots + event emission/sync
-- `internal/mxevent/` — the interaction event schema + triggerId HMAC
-- `internal/bot/` — client API, message-with-components composer, edit helpers
-- `examples/approval-bot/` — demo: "Deploy v1.2.3? [Approve] [Reject]"
-- `web/` — minimal client page that renders components from custom events (demo client)
+- `cmd/mxui-server/` — bot gateway + Discord compat routes (Go, SQLite)
+- `internal/mxevent/` — event schema, trigger verification (tested)
+- `internal/bot/` — thin Matrix CS-API client
+- `web/` — single-file client (no build, no deps)
+- `examples/` — approval-bot (native), demo-bot (full surface),
+  webhook-bot (zero Matrix code), discord-bot (real discord.js)
+- `evidence/` — e2e scripts + screenshots for every tagged version
 
-## Not in MVP (deliberately)
+## Not yet (v0.6+)
 
-- Modals/contextual bars (need a real client; v2)
-- Slash commands (needs client composer integration; v2)
-- The Discord-bot-API compat layer (consequence of the interaction layer, later)
-- MSC proposal writing (after the schema survives dogfooding)
+E2EE rooms (Megolm; the moat — server never holds room keys), ed25519 webhook
+signatures, modals over the Discord slice, MSC draft, multi-room routing,
+docker packaging.
 
 ## Homeserver notes (this machine)
 
 - continuwuity container `continuwuity`, port 6167, server_name `macbook.tailfddf66.ts.net`
-- registration open, encryption enabled, federation disabled (fine for MVP)
+- registration token `mxui-mvp-dev-token` (compose), encryption enabled, federation disabled
