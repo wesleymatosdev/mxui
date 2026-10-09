@@ -118,32 +118,47 @@ func (c *Client) CreateRoom(aliasLocalpart string) (string, error) {
 	return out.RoomID, err
 }
 
-// SendInteractive posts the m.room.message carrying the component blocks in
-// unsigned.mxui, with an HTML fallback rendering for stock clients.
+// SendInteractive posts TWO events: a friendly m.room.message fallback
+// (human-readable text with bracket labels) and a persistent
+// io.mxui.component_message event carrying the machine-readable blocks.
+// The component event relates to the fallback via m.in_reply_to so clients
+// can pair them; a cold sync sees both with zero server-side state.
 func (c *Client) SendInteractive(roomID string, p mxevent.MessagePayload) (string, error) {
 	html := p.HTML
 	if html == "" {
 		html = escapeHTML(p.Body)
 	}
-	// Fallback markup appended for plain clients: mxui:// deep-links.
-	fallback := `<hr><small>mxui interactive — ` + renderFallbackLinks(p.Blocks) + `</small>`
+	fallback := `<hr><small>mxui interactive — ` + fallbackLabels(p.Blocks) + `</small>`
 	content := map[string]any{
-		"msgtype": "m.text",
-		"body":    p.Body + "\n(mxui: " + fallbackLabels(p.Blocks) + ")",
-		"format":  "org.matrix.custom.html",
+		"msgtype":       "m.text",
+		"body":          p.Body + "\n(mxui: " + fallbackLabels(p.Blocks) + ")",
+		"format":        "org.matrix.custom.html",
 		"formatted_body": html + fallback,
-		"unsigned": map[string]any{"mxui": map[string]any{"blocks": p.Blocks}},
 	}
-	// NB: unsigned on send is not persisted by all HS; continuwuity keeps
-	// client-supplied unsigned.mxui for same-server render. The canonical
-	// location for v2 is a dedicated io.mxui.component_message event; MVP
-	// optimizes for stock-client readability instead.
 	var out struct {
 		EventID string `json:"event_id"`
 	}
-	err := c.do("PUT", "/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/send/m.room.message/"+
-		fmt.Sprintf("mxui%d", time.Now().UnixNano()), content, &out)
-	return out.EventID, err
+	if err := c.do("PUT", "/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/send/m.room.message/"+
+		fmt.Sprintf("mxui%d", time.Now().UnixNano()), content, &out); err != nil {
+		return "", err
+	}
+
+	cme := mxevent.ComponentMessageEvent{
+		Blocks: p.Blocks,
+		Expiry: time.Now().Add(24 * time.Hour).Unix(),
+	}
+	cmeContent := map[string]any{
+		"blocks": cme.Blocks,
+		"expiry": cme.Expiry,
+		"m.relates_to": map[string]any{
+			"rel_type": "m.in_reply_to", "event_id": out.EventID,
+		},
+	}
+	if err := c.do("PUT", "/_matrix/client/v3/rooms/"+url.PathEscape(roomID)+"/send/io.mxui.component_message/"+
+		fmt.Sprintf("c%d", time.Now().UnixNano()), cmeContent, nil); err != nil {
+		return out.EventID, err
+	}
+	return out.EventID, nil
 }
 
 // EditMessage replaces the body of a previous message (m.room.message edit).

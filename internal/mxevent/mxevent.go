@@ -35,6 +35,8 @@ type ComponentBlock struct {
 	Components []Component `json:"components"`
 }
 
+// v1 trigger scheme lives in persist.go (per-message tokens, no shared secret).
+
 // MessagePayload is what a bot sends to mxui-server to post an interactive message.
 type MessagePayload struct {
 	RoomID  string          `json:"roomId"`
@@ -92,6 +94,9 @@ type triggerRegistry struct {
 }
 
 var triggers = &triggerRegistry{used: map[string]bool{}}
+
+// RestoreTriggers clears the single-use registry (test helper).
+func RestoreTriggers() { triggers.used = map[string]bool{} }
 
 func VerifyTrigger(a *ActionEvent) bool {
 	if a.TS < time.Now().Add(-60*time.Second).Unix() {
